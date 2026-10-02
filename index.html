@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ridgehold</title>
+    <meta
+      name="description"
+      content="Ridgehold is a long-session ridge settlement. Lay roads, raise roofs, and keep the fold through the seasons."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,560;9..144,680&family=Outfit:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="stage"></div>
+    <div id="vignette"></div>
+    <div id="hud">
+      <header>
+        <div class="brand">
+          <svg class="crest" viewBox="0 0 64 64" aria-hidden="true">
+            <path d="M6 44 L32 12 L58 44 L50 44 L32 24 L14 44 Z" fill="#e0c48a" />
+            <rect x="28" y="38" width="8" height="14" fill="#8c3b3b" />
+          </svg>
+          <div>
+            <p class="eyebrow">The high fold</p>
+            <h1>Ridgehold</h1>
+            <p id="clock">Day 1 · Spring · Dawn</p>
+          </div>
+        </div>
+        <div class="resources" aria-label="Stores">
+          <div class="res" id="res-wood"><span class="k">Wood</span><span class="num">0</span></div>
+          <div class="res" id="res-food"><span class="k">Food</span><span class="num">0</span></div>
+          <div class="res" id="res-stone"><span class="k">Stone</span><span class="num">0</span></div>
+          <div class="res" id="res-pop"><span class="k">Souls</span><span class="num">0</span></div>
+        </div>
+        <div class="cluster">
+          <p id="threat">The valley is quiet</p>
+          <div class="speeds" role="group" aria-label="Speed">
+            <button type="button" data-speed="0" title="Pause (Space)">Hold</button>
+            <button type="button" data-speed="1" title="Steady">I</button>
+            <button type="button" data-speed="2" title="Brisk">II</button>
+            <button type="button" data-speed="3" title="Hard wind">III</button>
+          </div>
+          <button type="button" id="btn-raids" aria-pressed="true">Watch</button>
+          <button type="button" id="btn-save">Keep ledger</button>
+          <button type="button" id="btn-load">Open ledger</button>
+          <button type="button" id="btn-new">New ridge</button>
+        </div>
+      </header>
+      <section id="chronicle" aria-label="Chronicle">
+        <h2>Chronicle</h2>
+        <ol id="log"></ol>
+      </section>
+      <aside id="side">
+        <canvas id="minimap" width="180" height="120" aria-label="Ridge map"></canvas>
+        <section id="aims">
+          <h2>Steward's aims</h2>
+          <ul id="aim-list"></ul>
+        </section>
+        <section id="inspect" hidden>
+          <h2 id="inspect-title">Hall</h2>
+          <p id="inspect-body"></p>
+          <button type="button" id="inspect-demolish">Pull down</button>
+        </section>
+      </aside>
+      <footer>
+        <div id="toolbar" role="toolbar" aria-label="Build"></div>
+        <p id="keys">Drag orbit · right-drag pan · scroll zoom · 1–7 build · R turn · X pull down · F hall · space hold</p>
+      </footer>
+    </div>
+    <div id="alarm" hidden>Raiders on the cut</div>
+    <div id="toast" role="status"></div>
+    <p id="epigraph">You keep the high fold. Lay the roads. Raise the roofs. Outlast the valley.</p>
+    <p id="fail" hidden>This browser could not start the ridge.</p>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

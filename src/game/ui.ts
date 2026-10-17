@@ -23,6 +23,7 @@ export interface Hud {
   setHint(text: string, x: number, y: number, bad: boolean): void;
   hideHint(): void;
   sync(state: GameState): void;
+  floater(text: string, x: number, y: number, kind: 'wood' | 'food' | 'stone'): void;
 }
 
 export function mountHud(
@@ -105,6 +106,17 @@ export function mountHud(
     },
     hideHint() {
       hint.hidden = true;
+    },
+    floater(text: string, x: number, y: number, kind: 'wood' | 'food' | 'stone') {
+      const el = document.createElement('span');
+      el.className = `floater ${kind}`;
+      el.textContent = text;
+      el.style.left = `${x}px`;
+      el.style.top = `${y}px`;
+      document.body.appendChild(el);
+      const drop = () => el.remove();
+      el.addEventListener('animationend', drop);
+      window.setTimeout(drop, 1100);
     },
     sync(state: GameState) {
       hud.speed = state.speed;
@@ -198,9 +210,10 @@ function setNum(selector: string, value: number, prev: { wood: number; food: num
 }
 
 function flash(el: HTMLElement, up: boolean): void {
-  el.classList.remove('up', 'down');
+  el.classList.remove('up', 'down', 'bump');
   void el.offsetWidth;
   el.classList.add(up ? 'up' : 'down');
+  if (up) el.classList.add('bump');
 }
 
 function escapeHtml(value: string): string {

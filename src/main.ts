@@ -1,5 +1,5 @@
 import './style.css';
-import { CATALOG, SAVE_KEY, TOOLS, cellCenter, dims, worldToCell, type Kind } from './game/config';
+import { CATALOG, SAVE_KEY, TOOLS, cellCenter, dims, footprintCenter, worldToCell, type Kind } from './game/config';
 import { sampleHeight } from './game/terrain';
 import { World } from './game/render';
 import { GameState } from './game/state';
@@ -86,6 +86,19 @@ function frame(now: number): void {
   clock.last = now;
   game.state.tick(raw * game.state.speed);
   world.update(game.state, raw);
+  const seenYield = new Map<number, number>();
+  for (const gain of game.state.takeYields()) {
+    const building = game.state.buildings.find((b) => b.id === gain.id);
+    if (!building) continue;
+    const { w, h } = dims(building.kind, building.rot);
+    const spot = footprintCenter(building.gx, building.gz, w, h);
+    const lift = sampleHeight(spot.x, spot.z, game.state.seed) + 2.2;
+    const point = world.project(spot.x, lift, spot.z);
+    if (!point) continue;
+    const stack = seenYield.get(building.id) ?? 0;
+    seenYield.set(building.id, stack + 1);
+    hud.floater(`+${gain.amount}`, point.x, point.y - stack * 18, gain.resource);
+  }
   hud.sync(game.state);
   saveAcc += raw;
   if (saveAcc > 22) {
@@ -211,6 +224,7 @@ function act(clientX: number, clientY: number): void {
     const anchor = anchorOf(hud.tool, hud.rot, cell.gx, cell.gz);
     const err = game.state.place(hud.tool, anchor.gx, anchor.gz, hud.rot);
     if (err) hud.toast(err);
+    else world.nudge();
     refreshGhost();
     return;
   }

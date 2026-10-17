@@ -72,6 +72,12 @@ export interface Shot {
   life: number;
 }
 
+export interface YieldNote {
+  id: number;
+  resource: 'wood' | 'food' | 'stone';
+  amount: number;
+}
+
 export interface SaveData {
   v: 1;
   seed: number;
@@ -150,6 +156,7 @@ export class GameState {
   private byId = new Map<number, Building>();
   private foodFrac = 0;
   private quietWood = new Set<number>();
+  private yieldNotes: YieldNote[] = [];
 
   private constructor(seed: number) {
     this.seed = seed;
@@ -256,6 +263,12 @@ export class GameState {
       speed: this.speed,
       view: this.view,
     };
+  }
+
+  takeYields(): YieldNote[] {
+    const notes = this.yieldNotes;
+    this.yieldNotes = [];
+    return notes;
   }
 
   summary() {
@@ -638,10 +651,14 @@ export class GameState {
         if (this.millHelps(b)) mill = 1.45;
         const gain = Math.max(1, Math.round(3 * seasonMult(season) * crewFactor * link * mill));
         this.resources.food += gain;
+        this.noteYield(b.id, 'food', gain);
         const target = season === 'winter' ? 0.15 : season === 'spring' ? 0.62 : season === 'autumn' ? 0.78 : 1;
         b.growth += (target - b.growth) * 0.25;
       } else if (b.kind === 'mill') {
-        if (linked) this.resources.food += 1;
+        if (linked) {
+          this.resources.food += 1;
+          this.noteYield(b.id, 'food', 1);
+        }
       } else if (b.kind === 'woodcamp') {
         const tree = this.nearestTree(b, 7);
         if (!tree) {
@@ -650,16 +667,20 @@ export class GameState {
             this.logMsg('A woodcamp looks over a thinning treeline.');
           }
         } else {
-          this.resources.wood += 2;
+          let gain = 2;
           tree.hp -= 1;
           if (tree.hp <= 0) {
             tree.hp = 0;
-            this.resources.wood += 2;
+            gain += 2;
             this.treeRev++;
           }
+          this.resources.wood += gain;
+          this.noteYield(b.id, 'wood', gain);
         }
       } else if (b.kind === 'quarry') {
-        this.resources.stone += crewFactor > 1 ? 2 : 1;
+        const gain = crewFactor > 1 ? 2 : 1;
+        this.resources.stone += gain;
+        this.noteYield(b.id, 'stone', gain);
       }
     }
     for (const b of this.buildings) {
@@ -668,6 +689,12 @@ export class GameState {
       b.growth += (target - b.growth) * 0.08;
     }
     this.consume();
+  }
+
+  private noteYield(id: number, resource: YieldNote['resource'], amount: number): void {
+    if (amount <= 0) return;
+    this.yieldNotes.push({ id, resource, amount });
+    if (this.yieldNotes.length > 48) this.yieldNotes.splice(0, this.yieldNotes.length - 48);
   }
 
   private consume(): void {

@@ -31,11 +31,40 @@ interface View {
   baseRotX: number;
   baseRotZ: number;
   pick: THREE.Mesh;
+  pop: number;
+  groundY: number;
+}
+
+interface Mote {
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  life: number;
+  max: number;
+  r: number;
+  g: number;
+  b: number;
+}
+
+interface Grave {
+  view: View;
+  t: number;
+  groundY: number;
 }
 
 function smooth(t: number): number {
   const x = Math.max(0, Math.min(1, t));
   return x * x * (3 - 2 * x);
+}
+
+function easeOutBack(t: number): number {
+  const c1 = 2.4;
+  const c3 = c1 + 1;
+  const u = t - 1;
+  return 1 + c3 * u * u * u + c1 * u * u;
 }
 
 function paint(geo: THREE.BufferGeometry, color: THREE.Color): THREE.BufferGeometry {
@@ -186,6 +215,19 @@ export class World {
   private wheatMat: THREE.MeshStandardMaterial;
   private pineMat: THREE.MeshStandardMaterial;
   private broadMat: THREE.MeshStandardMaterial;
+  private reduced = false;
+  private quietSpawn = false;
+  private graves: Grave[] = [];
+  private motes: Mote[] = [];
+  private motePos!: THREE.BufferAttribute;
+  private moteCol!: THREE.BufferAttribute;
+  private moteLife!: THREE.BufferAttribute;
+  private motePoints!: THREE.Points;
+  private ringPool: THREE.Mesh[] = [];
+  private liveRings: Array<{ mesh: THREE.Mesh; t: number; life: number; spread: number }> = [];
+  private kick = new THREE.Vector3();
+  private appliedKick = new THREE.Vector3();
+  private readonly moteCap = 96;
 
   constructor(stage: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -301,6 +343,8 @@ export class World {
 
     this.ghost.visible = false;
     this.scene.add(this.ghost);
+    this.reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    this.setupJuice();
     this.buildSky();
     this.resize(stage.clientWidth, stage.clientHeight);
   }
@@ -314,8 +358,19 @@ export class World {
     this.dom.style.height = `${height}px`;
   }
 
+  nudge(): void {
+    if (this.reduced || this.introActive) return;
+    const dir = new THREE.Vector3();
+    this.camera.getWorldDirection(dir);
+    dir.multiplyScalar(-0.34);
+    dir.y += 0.07;
+    this.kick.add(dir);
+    if (this.kick.length() > 0.5) this.kick.setLength(0.5);
+  }
+
   mount(state: GameState, intro: boolean): void {
     this.clearDynamic();
+    this.quietSpawn = true;
     this.seed = state.seed;
     this.seasonStamp = null;
     this.roadStamp = -1;
@@ -414,6 +469,8 @@ export class World {
 
     this.frameDt = rawDt;
     this.syncBuildings(state);
+    this.quietSpawn = false;
+    this.updateBuildFeel(rawDt);
     this.syncPeople(state);
     this.syncRaiders(state);
     this.syncSelection(state);
@@ -430,8 +487,17 @@ export class World {
         this.introActive = false;
         this.controls.enabled = true;
       }
+      this.appliedKick.set(0, 0, 0);
+    } else {
+      this.camera.position.sub(this.appliedKick);
     }
     this.controls.update();
+    this.kick.multiplyScalar(Math.exp(-rawDt * 7.5));
+    if (this.kick.lengthSq() < 1e-5) this.kick.set(0, 0, 0);
+    if (!this.introActive) {
+      this.camera.position.add(this.kick);
+      this.appliedKick.copy(this.kick);
+    }
     const target = this.controls.target;
     this.sunLight.target.position.copy(target);
     this.sunLight.shadow.camera.updateProjectionMatrix();
@@ -714,6 +780,13 @@ export class World {
   }
 
   private clearDynamic(): void {
+    for (const grave of this.graves) this.finishGrave(grave);
+    this.graves = [];
+    this.motes = [];
+    for (const ring of this.liveRings) ring.mesh.visible = false;
+    this.liveRings = [];
+    this.kick.set(0, 0, 0);
+    this.appliedKick.set(0, 0, 0);
     for (const id of [...this.views.keys()]) this.removeView(id);
     for (const mesh of this.people.values()) {
       this.scene.remove(mesh);
@@ -730,14 +803,20 @@ export class World {
 
   private syncBuildings(state: GameState): void {
     const alive = new Set(state.buildings.map((b) => b.id));
-    for (const id of this.views.keys()) if (!alive.has(id)) this.removeView(id);
+    for (const id of this.views.keys()) {
+      if (alive.has(id)) continue;
+      const view = this.views.get(id);
+      if (!view) continue;
+      this.views.delete(id);
+      this.beginCollapse(view);
+    }
     for (const building of state.buildings) {
-      if (!this.views.has(building.id)) this.addBuilding(building);
+      if (!this.views.has(building.id)) this.addBuilding(building, !this.quietSpawn);
       this.refreshBuilding(state, building);
     }
   }
 
-  private addBuilding(building: Building): void {
+  private addBuilding(building: Building, juice: boolean): void {
     const { w, h } = dims(building.kind, building.rot);
     const center = footprintCenter(building.gx, building.gz, w, h);
     const y = sampleHeight(center.x, center.z, this.seed);
@@ -751,6 +830,8 @@ export class World {
     const baseRotX = THREE.MathUtils.clamp((hz2 - hz1) / 2.2, -0.1, 0.1);
     root.rotation.x = baseRotX;
     root.rotation.z = baseRotZ;
+    const pop = juice && !this.reduced ? 0 : 1;
+    root.scale.setScalar(pop === 0 ? 0.001 : 1);
     const { w: fw, h: fh } = dims(building.kind, building.rot);
     const pick = new THREE.Mesh(
       new THREE.BoxGeometry(fw * CELL * 0.96, 2.4, fh * CELL * 0.96),
@@ -771,8 +852,11 @@ export class World {
       baseRotX,
       baseRotZ,
       pick,
+      pop,
+      groundY: y,
     };
     this.views.set(building.id, view);
+    if (pop === 0) this.puff(center.x, y, center.z, 'dust');
   }
 
   private refreshBuilding(state: GameState, building: Building): void {
@@ -788,6 +872,189 @@ export class World {
     if (view.wheat) this.stampWheat(view.wheat, building.growth);
     const night = 1 - smooth((sunElevation(state.day - Math.floor(state.day)) + 0.05) / 0.45);
     for (const windowMat of view.windows) windowMat.emissiveIntensity = night * 1.35;
+  }
+
+  private setupJuice(): void {
+    const geo = new THREE.BufferGeometry();
+    const pos = new Float32Array(this.moteCap * 3);
+    const col = new Float32Array(this.moteCap * 3);
+    const life = new Float32Array(this.moteCap);
+    for (let i = 0; i < this.moteCap; i++) pos[i * 3 + 1] = -80;
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
+    geo.setAttribute('aLife', new THREE.BufferAttribute(life, 1));
+    const material = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      vertexShader: `
+        attribute vec3 aColor;
+        attribute float aLife;
+        varying vec3 vColor;
+        varying float vLife;
+        void main() {
+          vColor = aColor;
+          vLife = aLife;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = clamp(560.0 / max(1.0, -mv.z), 4.0, 72.0);
+          gl_Position = projectionMatrix * mv;
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vColor;
+        varying float vLife;
+        void main() {
+          float d = length(gl_PointCoord - vec2(0.5));
+          if (d > 0.5) discard;
+          float soft = smoothstep(0.5, 0.08, d);
+          gl_FragColor = vec4(vColor, soft * vLife);
+        }
+      `,
+    });
+    this.motePoints = new THREE.Points(geo, material);
+    this.motePoints.frustumCulled = false;
+    this.scene.add(this.motePoints);
+    this.motePos = geo.getAttribute('position') as THREE.BufferAttribute;
+    this.moteCol = geo.getAttribute('aColor') as THREE.BufferAttribute;
+    this.moteLife = geo.getAttribute('aLife') as THREE.BufferAttribute;
+
+    const ringGeo = new THREE.CircleGeometry(1, 22);
+    for (let i = 0; i < 8; i++) {
+      const mesh = new THREE.Mesh(
+        ringGeo,
+        new THREE.MeshBasicMaterial({
+          color: 0xe7d3b0,
+          transparent: true,
+          opacity: 0,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.visible = false;
+      mesh.frustumCulled = false;
+      this.scene.add(mesh);
+      this.ringPool.push(mesh);
+    }
+  }
+
+  private puff(x: number, y: number, z: number, kind: 'dust' | 'debris'): void {
+    if (this.reduced) return;
+    const count = kind === 'dust' ? 26 : 22;
+    const debris = kind === 'debris';
+    for (let i = 0; i < count; i++) {
+      if (this.motes.length >= this.moteCap) this.motes.shift();
+      const angle = Math.random() * Math.PI * 2;
+      const speed = (debris ? 1.4 : 0.9) + Math.random() * (debris ? 2.1 : 1.5);
+      this.motes.push({
+        x: x + (Math.random() - 0.5) * 0.45,
+        y: y + 0.15 + Math.random() * 0.25,
+        z: z + (Math.random() - 0.5) * 0.45,
+        vx: Math.cos(angle) * speed,
+        vy: (debris ? 1.7 : 1.15) + Math.random() * (debris ? 2.1 : 1.5),
+        vz: Math.sin(angle) * speed,
+        life: 0,
+        max: 0.42 + Math.random() * 0.28,
+        r: debris ? 0.48 + Math.random() * 0.16 : 0.9,
+        g: debris ? 0.36 + Math.random() * 0.08 : 0.8,
+        b: debris ? 0.24 : 0.58,
+      });
+    }
+    const mesh = this.ringPool.find((entry) => !entry.visible);
+    if (!mesh) return;
+    const mat = mesh.material as THREE.MeshBasicMaterial;
+    mat.color.set(debris ? 0x9a7048 : 0xe7d3b0);
+    mat.opacity = 0.5;
+    mesh.position.set(x, y + 0.12, z);
+    mesh.scale.setScalar(0.28);
+    mesh.visible = true;
+    this.liveRings.push({ mesh, t: 0, life: debris ? 0.52 : 0.44, spread: debris ? 2.3 : 2.7 });
+  }
+
+  private updateBuildFeel(dt: number): void {
+    for (const view of this.views.values()) {
+      if (view.pop >= 1) continue;
+      view.pop = Math.min(1, view.pop + dt / 0.7);
+      view.root.scale.setScalar(view.pop >= 1 ? 1 : Math.max(0.001, easeOutBack(view.pop)));
+    }
+    for (let i = this.graves.length - 1; i >= 0; i--) {
+      const grave = this.graves[i];
+      grave.t += dt;
+      const k = Math.min(1, grave.t / 0.64);
+      const sink = k * k;
+      grave.view.root.scale.set(1 + sink * 0.24, Math.max(0.05, 1 - sink), 1 + sink * 0.24);
+      grave.view.root.position.y = grave.groundY - sink * 0.95;
+      grave.view.root.rotation.z = grave.view.baseRotZ + sink * 0.72;
+      grave.view.root.rotation.x = grave.view.baseRotX + sink * 0.2;
+      if (k >= 1) {
+        this.finishGrave(grave);
+        this.graves.splice(i, 1);
+      }
+    }
+    this.updateMotes(dt);
+    this.updateRings(dt);
+  }
+
+  private beginCollapse(view: View): void {
+    this.picks = this.picks.filter((pick) => pick !== view.pick);
+    if (this.reduced) {
+      this.finishGrave({ view, t: 1, groundY: view.groundY });
+      return;
+    }
+    this.puff(view.root.position.x, view.groundY, view.root.position.z, 'debris');
+    this.graves.push({ view, t: 0, groundY: view.groundY });
+  }
+
+  private finishGrave(grave: Grave): void {
+    this.scene.remove(grave.view.root);
+    this.picks = this.picks.filter((pick) => pick !== grave.view.pick);
+    disposeTree(grave.view.root);
+  }
+
+  private updateMotes(dt: number): void {
+    const next: Mote[] = [];
+    for (const mote of this.motes) {
+      mote.life += dt;
+      if (mote.life >= mote.max) continue;
+      mote.vy -= dt * 3.4;
+      mote.x += mote.vx * dt;
+      mote.y += mote.vy * dt;
+      mote.z += mote.vz * dt;
+      const drag = Math.max(0, 1 - dt * 1.5);
+      mote.vx *= drag;
+      mote.vz *= drag;
+      next.push(mote);
+    }
+    this.motes = next;
+    for (let i = 0; i < this.moteCap; i++) {
+      const mote = this.motes[i];
+      if (!mote) {
+        this.motePos.setXYZ(i, 0, -80, 0);
+        this.moteLife.setX(i, 0);
+        continue;
+      }
+      const fade = 1 - mote.life / mote.max;
+      this.motePos.setXYZ(i, mote.x, mote.y, mote.z);
+      this.moteCol.setXYZ(i, mote.r, mote.g, mote.b);
+      this.moteLife.setX(i, fade);
+    }
+    this.motePos.needsUpdate = true;
+    this.moteCol.needsUpdate = true;
+    this.moteLife.needsUpdate = true;
+  }
+
+  private updateRings(dt: number): void {
+    for (let i = this.liveRings.length - 1; i >= 0; i--) {
+      const ring = this.liveRings[i];
+      ring.t += dt;
+      const k = ring.t / ring.life;
+      if (k >= 1) {
+        ring.mesh.visible = false;
+        this.liveRings.splice(i, 1);
+        continue;
+      }
+      ring.mesh.scale.setScalar(0.3 + k * ring.spread);
+      (ring.mesh.material as THREE.MeshBasicMaterial).opacity = (1 - k) * 0.5;
+    }
   }
 
   private removeView(id: number): void {

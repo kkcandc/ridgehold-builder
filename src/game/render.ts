@@ -18,6 +18,7 @@ import {
 } from './config';
 import type { Building, GameState } from './state';
 import { sampleHeight, sampleSlope } from './terrain';
+import { SettlementLife, type LifeSample, type SmokeSource } from './life';
 
 const TUNICS = [0x8d3d36, 0x355e49, 0x3c4e78, 0x8a5a2c, 0x6d4560, 0xb7a37a, 0x4e5c38];
 
@@ -53,6 +54,13 @@ interface Grave {
   view: View;
   t: number;
   groundY: number;
+}
+
+function smokeTone(kind: Kind): SmokeSource['tone'] | null {
+  if (kind === 'house' || kind === 'hall') return 'hearth';
+  if (kind === 'farm' || kind === 'mill' || kind === 'woodcamp') return 'work';
+  if (kind === 'quarry') return 'dust';
+  return null;
 }
 
 function smooth(t: number): number {
@@ -197,10 +205,12 @@ export class World {
   private ghostKey = '';
   private selectRing: THREE.Mesh;
   private shotLines: THREE.LineSegments;
-  private smoke: THREE.Points;
-  private smokeLife: number[] = [];
-  private birds: THREE.Mesh[] = [];
   private fireflies: THREE.Points;
+  private life!: SettlementLife;
+  private smokeScratch = new THREE.Vector3();
+  private smokeCache: SmokeSource[] = [];
+  private smokeCacheRev = -1;
+  private smokeCacheCount = -1;
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
   private introActive = false;
@@ -309,16 +319,6 @@ export class World {
     );
     this.scene.add(this.shotLines);
 
-    const smokeGeo = new THREE.BufferGeometry();
-    const smokePos = new Float32Array(48 * 3);
-    smokeGeo.setAttribute('position', new THREE.BufferAttribute(smokePos, 3));
-    this.smoke = new THREE.Points(
-      smokeGeo,
-      new THREE.PointsMaterial({ color: '#d9d3c8', size: 0.45, transparent: true, opacity: 0.35, depthWrite: false }),
-    );
-    this.smokeLife = Array.from({ length: 48 }, () => Math.random());
-    this.scene.add(this.smoke);
-
     const flyGeo = new THREE.BufferGeometry();
     const flyPos = new Float32Array(36 * 3);
     for (let i = 0; i < 36; i++) {
@@ -333,17 +333,10 @@ export class World {
     );
     this.scene.add(this.fireflies);
 
-    for (let i = 0; i < 7; i++) {
-      const bird = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.7, 4), mat(0x2a2624, 0.7));
-      bird.rotation.x = Math.PI / 2;
-      bird.userData.phase = i * 1.3;
-      this.scene.add(bird);
-      this.birds.push(bird);
-    }
-
     this.ghost.visible = false;
     this.scene.add(this.ghost);
     this.reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    this.life = new SettlementLife(this.scene, this.reduced, this.uTime);
     this.setupJuice();
     this.buildSky();
     this.resize(stage.clientWidth, stage.clientHeight);
@@ -475,8 +468,7 @@ export class World {
     this.syncRaiders(state);
     this.syncSelection(state);
     this.syncShots(state);
-    this.updateSmoke(state, rawDt);
-    this.updateBirds(rawDt);
+    this.life.update(state, rawDt, this.seed, this.smokeSources(state), this.flockFocus(state));
     this.updateFireflies(tod, rawDt);
 
     if (this.introActive) {
@@ -799,6 +791,12 @@ export class World {
     this.people.clear();
     this.raiderMeshes.clear();
     this.picks = [];
+    this.life.reset();
+    this.smokeCacheRev = -1;
+  }
+
+  lifeSample(): LifeSample {
+    return this.life.sample();
   }
 
   private syncBuildings(state: GameState): void {
@@ -1181,9 +1179,14 @@ export class World {
     wheat.count = n;
     wheat.instanceMatrix.needsUpdate = true;
     g.add(wheat);
+    const hearthStone = mat(0x6e6860, 0.95);
+    const hearth = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 0.14, 6), hearthStone);
+    hearth.position.set(sx * 0.28, 0.14, -sz * 0.28);
+    g.add(hearth);
     g.userData.wheat = wheat;
     g.userData.windows = [];
     g.userData.banners = [];
+    g.userData.chimney = new THREE.Vector3(sx * 0.28, 0.42, -sz * 0.28);
     return g;
   }
 
@@ -1227,10 +1230,13 @@ export class World {
     const winMat = new THREE.MeshStandardMaterial({ color: '#f3d7a4', emissive: '#ff9a3c', emissiveIntensity: 0, roughness: 0.4 });
     const win = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.28, 0.08), winMat);
     win.position.set(0.4, 1.15, 1.22);
-    g.add(base, roof, cap, blades, win);
+    const flue = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.38, 6), stone);
+    flue.position.set(-0.32, 2.55, -0.15);
+    g.add(base, roof, cap, blades, win, flue);
     g.userData.blades = blades;
     g.userData.windows = [winMat];
     g.userData.banners = [];
+    g.userData.chimney = new THREE.Vector3(-0.32, 2.78, -0.15);
     return g;
   }
 
@@ -1269,8 +1275,12 @@ export class World {
       log.castShadow = true;
       g.add(log);
     }
+    const stack = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.42, 0.22), mat(0x5c564e, 0.92));
+    stack.position.set(-0.4, 1.55, -0.15);
+    g.add(stack);
     g.userData.windows = [];
     g.userData.banners = [];
+    g.userData.chimney = new THREE.Vector3(-0.4, 1.8, -0.15);
     return g;
   }
 
@@ -1295,9 +1305,12 @@ export class World {
     }
     const beam = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.08, 0.08), postMat);
     beam.position.set(0, 1.5, -0.7);
-    g.add(beam);
+    const brazier = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.12, 6), mat(0x4a4038, 0.9));
+    brazier.position.set(0.55, 0.16, 0.35);
+    g.add(beam, brazier);
     g.userData.windows = [];
     g.userData.banners = [];
+    g.userData.chimney = new THREE.Vector3(0.55, 0.4, 0.35);
     return g;
   }
 
@@ -1434,37 +1447,31 @@ export class World {
     this.shotLines.visible = true;
   }
 
-  private updateSmoke(state: GameState, rawDt: number): void {
-    const chimneys: THREE.Vector3[] = [];
+  private flockFocus(state: GameState): { x: number; y: number; z: number } {
+    const hall = state.hall();
+    const { w, h } = dims(hall.kind, hall.rot);
+    const center = footprintCenter(hall.gx, hall.gz, w, h);
+    return { x: center.x, y: sampleHeight(center.x, center.z, this.seed), z: center.z };
+  }
+
+  private smokeSources(state: GameState): SmokeSource[] {
+    const popping = [...this.views.values()].some((view) => view.pop < 1);
+    if (!popping && this.smokeCacheRev === state.navRev && this.smokeCacheCount === state.buildings.length) return this.smokeCache;
+    const out: SmokeSource[] = [];
     for (const building of state.buildings) {
-      if (building.kind !== 'house' && building.kind !== 'hall') continue;
+      const tone = smokeTone(building.kind);
+      if (!tone) continue;
       const view = this.views.get(building.id);
       if (!view?.chimney) continue;
       view.root.updateWorldMatrix(true, false);
-      chimneys.push(view.root.localToWorld(view.chimney.clone()));
+      this.smokeScratch.copy(view.chimney);
+      view.root.localToWorld(this.smokeScratch);
+      out.push({ x: this.smokeScratch.x, y: this.smokeScratch.y, z: this.smokeScratch.z, tone });
     }
-    const pos = this.smoke.geometry.attributes.position as THREE.BufferAttribute;
-    for (let i = 0; i < this.smokeLife.length; i++) {
-      this.smokeLife[i] += rawDt * 0.35;
-      if (this.smokeLife[i] > 1 || pos.getY(i) === 0) {
-        this.smokeLife[i] = 0;
-        const origin = chimneys.length ? chimneys[i % chimneys.length] : new THREE.Vector3(0, -10, 0);
-        pos.setXYZ(i, origin.x, origin.y, origin.z);
-      } else {
-        pos.setY(i, pos.getY(i) + rawDt * 0.55);
-        pos.setX(i, pos.getX(i) + Math.sin(this.uTime.value + i) * rawDt * 0.15);
-      }
-    }
-    pos.needsUpdate = true;
-  }
-
-  private updateBirds(rawDt: number): void {
-    for (const bird of this.birds) {
-      const phase = (bird.userData.phase as number) + rawDt * 0.22;
-      bird.userData.phase = phase;
-      bird.position.set(Math.cos(phase) * 20, 15 + Math.sin(phase * 2) * 1.4, Math.sin(phase * 0.8) * 16);
-      bird.rotation.y = -phase;
-    }
+    this.smokeCache = out;
+    this.smokeCacheRev = state.navRev;
+    this.smokeCacheCount = state.buildings.length;
+    return out;
   }
 
   private updateFireflies(tod: number, rawDt: number): void {

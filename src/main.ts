@@ -1,4 +1,6 @@
 import './style.css';
+
+console.info('ridgehold alive-2026-10-26');
 import { CATALOG, SAVE_KEY, TOOLS, cellCenter, dims, footprintCenter, worldToCell, type Kind } from './game/config';
 import { sampleHeight } from './game/terrain';
 import { World } from './game/render';
@@ -285,6 +287,7 @@ declare global {
       canPlace: (kind: Kind, gx: number, gz: number) => string | null;
       project: (gx: number, gz: number) => { x: number; y: number } | null;
       rayCell: (x: number, y: number) => { gx: number; gz: number } | null;
+      alive: () => { reduced: boolean; flap: number; carts: Array<{ x: number; z: number }> };
     };
   }
 }
@@ -308,4 +311,5 @@ window.__ridgehold = {
     const hit = world.raycastTerrain(x, y);
     return hit ? worldToCell(hit.x, hit.z) : null;
   },
+  alive: () => world.lifeSample(),
 };

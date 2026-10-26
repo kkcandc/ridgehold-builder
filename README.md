@@ -1,6 +1,6 @@
 # Ridgehold
 
-A long-session settlement game on a high ridge. Lay roads, raise houses, farms, a mill, palisades, woodcamps, and a quarry. Villagers walk to their work. Seasons turn. The valley does not always stay quiet.
+A long-session settlement game on a high ridge. Lay roads, raise houses, farms, a mill, palisades, woodcamps, and a quarry. Villagers walk to their work, carts take the road, and hearth smoke climbs into a sky crossed by birds. Seasons turn. The valley does not always stay quiet.
 
 No accounts. The ledger stays in this browser.
 

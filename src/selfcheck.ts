@@ -1,7 +1,10 @@
 import { GameState } from './game/state';
 import { worldToCell } from './game/config';
+import { planHauls } from './game/haul';
 
 const state = GameState.fresh(11);
+const hauls = planHauls(state);
+if (!hauls.length || hauls[0].points.length < 2) throw new Error('fresh ridge has no cart route');
 const summary = state.summary();
 console.log('fresh', JSON.stringify(summary));
 if (!summary.buildings.includes('hall')) throw new Error('missing hall');
